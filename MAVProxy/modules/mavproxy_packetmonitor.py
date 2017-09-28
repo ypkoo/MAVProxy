@@ -23,6 +23,10 @@ from MAVProxy.modules.lib import mp_module
 from MAVProxy.modules.lib import mp_util
 from MAVProxy.modules.lib import mp_settings
 
+class MAVPacketLogger(object):
+	def __init__(self):
+		
+
 
 class PacketMonitorModule(mp_module.MPModule):
     def __init__(self, mpstate):
@@ -32,7 +36,9 @@ class PacketMonitorModule(mp_module.MPModule):
         self.boredom_interval = 10 # seconds
         self.last_bored = time.time()
 
-        self.logfile = open('packet_log.txt', mode='w') # possible extension: receive filename as an argument
+        #self.logfile = open('packet_log.txt', mode='w') # possible extension: receive filename as an argument
+        self.logger = logging.getLogger('logger')
+
 
         self.packets_mytarget = 0
         self.packets_othertarget = 0
@@ -86,6 +92,8 @@ class PacketMonitorModule(mp_module.MPModule):
 
     def mavlink_packet(self, m):
         '''handle mavlink packets'''
+
+
 
         if m.get_type() == 'GLOBAL_POSITION_INT':
             if self.settings.target_system == 0 or self.settings.target_system == m.get_srcSystem():
