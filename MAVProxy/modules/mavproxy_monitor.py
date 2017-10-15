@@ -19,6 +19,7 @@ from pymavlink import mavutil
 import errno
 import time
 from datetime import datetime
+from threading import Timer
 
 from MAVProxy.modules.lib import mp_module
 from MAVProxy.modules.lib import mp_util
@@ -40,12 +41,14 @@ class MAVPacketLogger(object):
 class PacketMonitorModule(mp_module.MPModule):
 	def __init__(self, mpstate):
 		"""Initialise module"""
-		super(PacketMonitorModule, self).__init__(mpstate, "packetmonitor", "monitoring MAVLink packets")
+		super(PacketMonitorModule, self).__init__(mpstate, "monitor", "monitoring MAVLink packets")
 		self.status_callcount = 0
 		self.boredom_interval = 10 # seconds
 		self.last_bored = time.time()
 		self.jamming_on = False
 		self.cur_seqnum = None
+		self.cur_radio_seqnum = None
+		self.cur_radio_status_seqnum = None
 
 		#self.logfile = open('packet_log.txt', mode='w') # possible extension: receive filename as an argument
 		pathname = os.path.abspath('log/')
@@ -63,59 +66,40 @@ class PacketMonitorModule(mp_module.MPModule):
 		self.example_settings = mp_settings.MPSettings(
 			[ ('verbose', bool, False),
 		  ])
-		self.add_command('example', self.cmd_example, "example module", ['status','set (LOGSETTING)'])
 		self.add_command('jamming', self.cmd_jamming, "jamming")
 
 	def usage(self):
 		'''show help on command line options'''
-		return "Usage: example <status|set>"
+		return "Usage: jamming <start [duration_in_minute]|stop>"
 
 	def cmd_jamming(self, args):
 
 		if len(args) == 0:
 			print self.usage()
 		elif args[0] == "start":
-			if self.jamming_on == False:
+			if len(args) != 2:
+				print self.usage()
+			elif self.jamming_on == False:
+				try:
+					jamming_duration = int(args[1])
+				except ValueError:
+					print self.usage()
+					return
+				
+				t = Timer(jamming_duration * 60, self.jamming_stop)
+				t.start()
 				self.logger.log("JAMMING_START")
-				print 'Jamming start'
+				print 'Jamming start (%dmin)' % jamming_duration
 				self.jamming_on = True
 			else:
 				print "Jamming signal is already on"
 		elif args[0] == "stop":
 			if self.jamming_on == True:
 				self.logger.log("JAMMING_STOP")
-				print 'Jamming strop'
+				print 'Jamming stop'
 				self.jamming_on = False
 			else:
 				print "Jamming signal is already off"
-
-		
-		
-
-	def cmd_example(self, args):
-		'''control behaviour of the module'''
-		if len(args) == 0:
-			print self.usage()
-		elif args[0] == "status":
-			print self.status()
-			self.logger.log("JAMMING START")
-
-		elif args[0] == "set":
-			self.example_settings.command(args[1:])
-		elif args[0] == "test":
-			print "test!"
-		else:
-			print self.usage()
-
-	def status(self):
-		'''returns information about module'''
-		self.status_callcount += 1
-		self.last_bored = time.time() # status entertains us
-		return("status called %(status_callcount)d times.  My target positions=%(packets_mytarget)u  Other target positions=%(packets_mytarget)u" %
-			   {"status_callcount": self.status_callcount,
-				"packets_mytarget": self.packets_mytarget,
-				"packets_othertarget": self.packets_othertarget,
-			   })
 
 
 
@@ -123,14 +107,40 @@ class PacketMonitorModule(mp_module.MPModule):
 		'''called rapidly by mavproxy'''
 		pass
 
+	def jamming_stop(self):
+		if self.jamming_on == True:
+			self.logger.log("JAMMING_STOP")
+			print 'Jamming stop'
+			self.jamming_on = False
+
 	def mavlink_packet(self, m):
 		'''handle mavlink packets'''
 		t = m.get_type()
-		
+		s = int(m.get_seq())
 
-		if t != 'RADIO' and t != 'RADIO_STATUS':
-			s = int(m.get_seq())
+		if t == 'RADIO':
+			if self.cur_radio_seqnum:
+				next_seqnum = self.cur_radio_seqnum + 1
+				gap = (s - next_seqnum) % 256
 
+				if gap != 0:
+					dropped = range(next_seqnum, next_seqnum + gap)
+					dropped = [i % 256 for i in dropped]
+					print '[RADIO]: %s got dropped' % str(dropped)
+
+			self.cur_radio_seqnum = s
+		elif t == 'RADIO_STATUS':
+			if self.cur_radio_status_seqnum:
+				next_seqnum = self.cur_radio_status_seqnum + 1
+				gap = (s - next_seqnum) % 256
+
+				if gap != 0:
+					dropped = range(next_seqnum, next_seqnum + gap)
+					dropped = [i % 256 for i in dropped]
+					print '[RADIO_STATUS]: %s got dropped' % str(dropped)
+
+			self.cur_radio_status_seqnum = s
+		else:
 			if self.cur_seqnum:
 				next_seqnum = self.cur_seqnum + 1
 				gap = (s - next_seqnum) % 256
@@ -138,12 +148,13 @@ class PacketMonitorModule(mp_module.MPModule):
 				if gap != 0:
 					dropped = range(next_seqnum, next_seqnum + gap)
 					dropped = [i % 256 for i in dropped]
-					print 'Jamming occured: %s got dropped' % str(dropped)
+					print '[NON_RADIO]: %s got dropped' % str(dropped)
 
 			self.cur_seqnum = s
+			
 
-			log_msg = "[%s] %s" % (s, t)
-			self.logger.log(log_msg)
+		log_msg = "[%s] %s" % (s, t)
+		self.logger.log(log_msg)
 
 
 		
